@@ -62,27 +62,28 @@ func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request) {
-	type ValidateChripConfigResponse struct {
-		Valid bool `json:"valid"`
+	type response struct {
+		CleanedBody string `json:"cleaned_body"`
 	}
 
-	type ValidateChripConfigRequest struct {
+	type request struct {
 		Body string `json:"body"`
 	}
 	
-	var chripConfigRequest ValidateChripConfigRequest
-	err := json.NewDecoder(r.Body).Decode(&chripConfigRequest)
+	var chirpConfigRequest request
+	err := json.NewDecoder(r.Body).Decode(&chirpConfigRequest)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
 	}
 
-	if len(chripConfigRequest.Body) > 140 {
-		respondWithError(w, http.StatusBadRequest, "Chrip is too long")
+	if len(chirpConfigRequest.Body) > 140 {
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
 
-	validResponse := ValidateChripConfigResponse{Valid: true}
+	cleanedBody := cleanSentence(chirpConfigRequest.Body)
+	validResponse := response{CleanedBody: cleanedBody}
 	respondWithJSON(w, http.StatusOK, validResponse)
 }
 

@@ -1,8 +1,9 @@
 package main
 
 import (
-	"net/http"
 	"encoding/json"
+	"net/http"
+	"strings"
 )
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -26,4 +27,17 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write(bytesResponse)
+}
+
+func cleanSentence(sentence string) string {
+	words := strings.Fields(sentence)
+	cleanedWords := make([]string, 0)
+	for _, word := range words {
+		if strings.ToLower(word) == "kerfuffle" || strings.ToLower(word) == "sharbert" || strings.ToLower(word) == "fornax" {
+			cleanedWords = append(cleanedWords, "****")		
+			continue
+		}
+		cleanedWords = append(cleanedWords, word)
+	}
+	return strings.Join(cleanedWords, " ") 
 }
