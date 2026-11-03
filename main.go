@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,9 +26,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+	mux.HandleFunc("POST /api/validate_chirp", apiCfg.validateChirpConfig)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
-
+	
 	err := server.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
@@ -58,3 +60,29 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.fileServerHits.Store(0)
 }
+
+func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request) {
+	type ValidateChripConfigResponse struct {
+		Valid bool `json:"valid"`
+	}
+
+	type ValidateChripConfigRequest struct {
+		Body string `json:"body"`
+	}
+	
+	var chripConfigRequest ValidateChripConfigRequest
+	err := json.NewDecoder(r.Body).Decode(&chripConfigRequest)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Something went wrong")
+		return
+	}
+
+	if len(chripConfigRequest.Body) > 140 {
+		respondWithError(w, http.StatusBadRequest, "Chrip is too long")
+		return
+	}
+
+	validResponse := ValidateChripConfigResponse{Valid: true}
+	respondWithJSON(w, http.StatusOK, validResponse)
+}
+
