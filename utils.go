@@ -23,8 +23,7 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 		respondWithError(w, http.StatusBadRequest, "Cannot encode the payload")
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")	
 	w.WriteHeader(code)
 	w.Write(bytesResponse)
 }

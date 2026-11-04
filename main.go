@@ -1,24 +1,41 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+	"github.com/kaylubr/chirpy/internal/database"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileServerHits atomic.Int32
+	dbQueries      database.Queries
 }
 
 func main() {
+	godotenv.Load()
+
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	dbQueries := database.New(db)
+
 	mux := http.NewServeMux()
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	apiCfg := apiConfig{fileServerHits: atomic.Int32{}}
+	apiCfg := apiConfig{fileServerHits: atomic.Int32{}, dbQueries: *dbQueries}
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +46,8 @@ func main() {
 	mux.HandleFunc("POST /api/validate_chirp", apiCfg.validateChirpConfig)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
-	
-	err := server.ListenAndServe()
+
+	err = server.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +86,7 @@ func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request
 	type request struct {
 		Body string `json:"body"`
 	}
-	
+
 	var chirpConfigRequest request
 	err := json.NewDecoder(r.Body).Decode(&chirpConfigRequest)
 	if err != nil {
@@ -86,4 +103,3 @@ func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request
 	validResponse := response{CleanedBody: cleanedBody}
 	respondWithJSON(w, http.StatusOK, validResponse)
 }
-
