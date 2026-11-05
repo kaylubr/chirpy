@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/kaylubr/chirpy/internal/auth"
 	"github.com/kaylubr/chirpy/internal/database"
 	_ "github.com/lib/pq"
 )
@@ -62,6 +63,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("POST /api/login", apiCfg.createLoginHandler)
 
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsRetrieve)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerChirpGet)
@@ -109,11 +111,12 @@ func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
-	type request struct {
-		Email string `json:"email"`
+	type UserRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
-	var userRequest request
+	var userRequest UserRequest
 	err := json.NewDecoder(r.Body).Decode(&userRequest)
 	if err != nil {
 		log.Printf("decode create user request: %v", err)
@@ -121,7 +124,15 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), userRequest.Email)
+	hashedPassword, err := auth.HashPassword(userRequest.Password)
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to hash password")
+		return
+	}
+
+	dbUser := database.CreateUserParams{Email: userRequest.Email, HashedPassword: hashedPassword}
+	user, err := cfg.db.CreateUser(r.Context(), dbUser)
 	if err != nil {
 		log.Print(err)
 		respondWithError(w, http.StatusInternalServerError, "Could not create user")
@@ -240,4 +251,41 @@ func (cfg *apiConfig) handlerChirpGet(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: dbChirp.UpdatedAt,
 	}
 	respondWithJSON(w, http.StatusOK, response)
+}
+
+func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request) {
+	type UserRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var userRequest UserRequest
+	err := json.NewDecoder(r.Body).Decode(&userRequest)
+	if err != nil {
+		log.Printf("decode create user request: %v", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	dbUser, err := cfg.db.GetUser(r.Context(), userRequest.Email)
+	if err != nil {
+		log.Printf("decode create user request: %v", err)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email")
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(userRequest.Password, dbUser.HashedPassword)
+	if err != nil || !match {
+		log.Printf("decode create user request: %v", err)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect password")
+		return
+	}
+
+	userResponse := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+	respondWithJSON(w, http.StatusOK, userResponse)
 }
