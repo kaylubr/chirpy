@@ -28,6 +28,14 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 func main() {
 	godotenv.Load()
 
@@ -53,6 +61,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("GET /api/chirps", apiCfg.GetAllChirpsHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
@@ -179,4 +188,25 @@ func (cfg *apiConfig) createChirpsHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	respondWithJSON(w, http.StatusCreated, response)
+}
+
+func (cfg *apiConfig) GetAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetAllChirps(r.Context())
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusInternalServerError, "Cannot get chirps")
+		return
+	}
+	chirpList := make([]Chirp, 0, len(dbChirps))
+	for _, c := range dbChirps {
+		chirps := Chirp{
+			ID:        c.ID,
+			Body:      c.Body,
+			UserID:    c.UserID,
+			CreatedAt: c.CreatedAt,
+			UpdatedAt: c.UpdatedAt,
+		}
+		chirpList = append(chirpList, chirps)
+	}
+	respondWithJSON(w, http.StatusOK, chirpList)
 }
