@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
+	"uuid"
 
 	"github.com/joho/godotenv"
 	"github.com/kaylubr/chirpy/internal/database"
@@ -16,7 +18,14 @@ import (
 
 type apiConfig struct {
 	fileServerHits atomic.Int32
-	dbQueries      database.Queries
+	db             database.Queries
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func main() {
@@ -35,7 +44,7 @@ func main() {
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	apiCfg := apiConfig{fileServerHits: atomic.Int32{}, dbQueries: *dbQueries}
+	apiCfg := apiConfig{fileServerHits: atomic.Int32{}, db: *dbQueries}
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +53,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("POST /api/validate_chirp", apiCfg.validateChirpConfig)
+	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
 
@@ -75,7 +85,13 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	platform := os.Getenv("PLATFORM")
+	if platform != "dev" {
+		respondWithError(w, http.StatusForbidden, "You don't have permission for this operation")
+		return
+	}
 	cfg.fileServerHits.Store(0)
+	cfg.db.DeleteAllUsers(r.Context())
 }
 
 func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request) {
@@ -102,4 +118,34 @@ func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request
 	cleanedBody := cleanSentence(chirpConfigRequest.Body)
 	validResponse := response{CleanedBody: cleanedBody}
 	respondWithJSON(w, http.StatusOK, validResponse)
+}
+
+func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
+	type request struct {
+		Email string `json:"email"`
+	}
+
+	var userRequest request
+	err := json.NewDecoder(r.Body).Decode(&userRequest)
+	if err != nil {
+		log.Printf("decode create user request: %v", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), userRequest.Email)
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusInternalServerError, "Could not create user")
+		return
+	}
+
+	userResponse := User{
+		ID:        uuid.UUID(user.ID),
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	respondWithJSON(w, http.StatusCreated, userResponse)
 }
