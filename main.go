@@ -9,8 +9,8 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
-	"uuid"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/kaylubr/chirpy/internal/database"
 	_ "github.com/lib/pq"
@@ -52,8 +52,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
-	mux.HandleFunc("POST /api/validate_chirp", apiCfg.validateChirpConfig)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
 
@@ -94,32 +94,6 @@ func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request
 	cfg.db.DeleteAllUsers(r.Context())
 }
 
-func (cfg *apiConfig) validateChirpConfig(w http.ResponseWriter, r *http.Request) {
-	type response struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	type request struct {
-		Body string `json:"body"`
-	}
-
-	var chirpConfigRequest request
-	err := json.NewDecoder(r.Body).Decode(&chirpConfigRequest)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Something went wrong")
-		return
-	}
-
-	if len(chirpConfigRequest.Body) > 140 {
-		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
-		return
-	}
-
-	cleanedBody := cleanSentence(chirpConfigRequest.Body)
-	validResponse := response{CleanedBody: cleanedBody}
-	respondWithJSON(w, http.StatusOK, validResponse)
-}
-
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
 	type request struct {
 		Email string `json:"email"`
@@ -148,4 +122,61 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, http.StatusCreated, userResponse)
+}
+
+func (cfg *apiConfig) createChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type chirpRequest struct {
+		UserID string `json:"user_id"`
+		Body   string `json:"body"`
+	}
+
+	type chirpResponse struct {
+		chirpRequest
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time
+		UpdatedAt time.Time
+	}
+
+	var chirpBody chirpRequest
+	err := json.NewDecoder(r.Body).Decode(&chirpBody)
+	if err != nil {
+		log.Printf("decode create user request: %v", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	cleanedChirp, err := validateChirp(w, chirpBody.Body)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+	chirpBody.Body = cleanedChirp
+	validUUID, err := uuid.Parse(chirpBody.UserID)
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusBadRequest, "Could not parse user id into uuid")
+		return
+	}
+
+	chirpQuery := database.CreateChripParams{
+		UserID: validUUID,
+		Body:   chirpBody.Body,
+	}
+
+	c, err := cfg.db.CreateChrip(r.Context(), chirpQuery)
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusBadRequest, "Could not create chirp")
+		return
+	}
+
+	response := chirpResponse{
+		ID:        c.ID,
+		Body:      c.Body,
+		UserID:    c.UserID.String(),
+		CreatedAt: c.CreatedAt,
+		UpdatedAt: c.UpdatedAt,
+	}
+
+	respondWithJSON(w, http.StatusCreated, response)
 }
