@@ -20,6 +20,7 @@ import (
 type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             database.Queries
+	jwtSecret      string
 }
 
 type User struct {
@@ -27,6 +28,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type Chirp struct {
@@ -40,6 +42,7 @@ type Chirp struct {
 func main() {
 	godotenv.Load()
 
+	jwtSecret := os.Getenv("SECRET")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -53,7 +56,12 @@ func main() {
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	apiCfg := apiConfig{fileServerHits: atomic.Int32{}, db: *dbQueries}
+
+	apiCfg := apiConfig{
+		fileServerHits: atomic.Int32{},
+		db:             *dbQueries,
+		jwtSecret:      jwtSecret,
+	}
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 
@@ -151,19 +159,25 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) createChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	type chirpRequest struct {
-		UserID string `json:"user_id"`
-		Body   string `json:"body"`
+		Body string `json:"body"`
 	}
 
 	type chirpResponse struct {
 		chirpRequest
 		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time
-		UpdatedAt time.Time
+		UserID    uuid.UUID `json:"user_id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	requestToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 
 	var chirpBody chirpRequest
-	err := json.NewDecoder(r.Body).Decode(&chirpBody)
+	err = json.NewDecoder(r.Body).Decode(&chirpBody)
 	if err != nil {
 		log.Printf("decode create user request: %v", err)
 		respondWithError(w, http.StatusBadRequest, "Invalid request body")
@@ -176,15 +190,15 @@ func (cfg *apiConfig) createChirpsHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	chirpBody.Body = cleanedChirp
-	validUUID, err := uuid.Parse(chirpBody.UserID)
+
+	jwtID, err := auth.ValidateJWT(requestToken, cfg.jwtSecret)
 	if err != nil {
-		log.Print(err)
-		respondWithError(w, http.StatusBadRequest, "Could not parse user id into uuid")
+		respondWithError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
 	chirpQuery := database.CreateChripParams{
-		UserID: validUUID,
+		UserID: jwtID,
 		Body:   chirpBody.Body,
 	}
 
@@ -198,7 +212,7 @@ func (cfg *apiConfig) createChirpsHandler(w http.ResponseWriter, r *http.Request
 	response := chirpResponse{
 		ID:        c.ID,
 		Body:      c.Body,
-		UserID:    c.UserID.String(),
+		UserID:    c.UserID,
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}
@@ -255,8 +269,9 @@ func (cfg *apiConfig) handlerChirpGet(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request) {
 	type UserRequest struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email           string `json:"email"`
+		Password        string `json:"password"`
+		ExpireInSeconds *int   `json:"expires_in_seconds"`
 	}
 
 	var userRequest UserRequest
@@ -265,6 +280,11 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		log.Printf("decode create user request: %v", err)
 		respondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
+	}
+
+	defaultExpiration := int((1 * time.Hour).Seconds())
+	if userRequest.ExpireInSeconds == nil || *userRequest.ExpireInSeconds > defaultExpiration {
+		userRequest.ExpireInSeconds = &defaultExpiration
 	}
 
 	dbUser, err := cfg.db.GetUser(r.Context(), userRequest.Email)
@@ -281,11 +301,18 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	token, err := auth.MakeJWT(
+		dbUser.ID,
+		cfg.jwtSecret,
+		time.Duration(*userRequest.ExpireInSeconds)*time.Second,
+	)
+
 	userResponse := User{
 		ID:        dbUser.ID,
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
 		Email:     dbUser.Email,
+		Token:     token,
 	}
 	respondWithJSON(w, http.StatusOK, userResponse)
 }
