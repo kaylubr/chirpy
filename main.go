@@ -24,11 +24,12 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -269,9 +270,8 @@ func (cfg *apiConfig) handlerChirpGet(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request) {
 	type UserRequest struct {
-		Email           string `json:"email"`
-		Password        string `json:"password"`
-		ExpireInSeconds *int   `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	var userRequest UserRequest
@@ -280,11 +280,6 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		log.Printf("decode create user request: %v", err)
 		respondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
-	}
-
-	defaultExpiration := int((1 * time.Hour).Seconds())
-	if userRequest.ExpireInSeconds == nil || *userRequest.ExpireInSeconds > defaultExpiration {
-		userRequest.ExpireInSeconds = &defaultExpiration
 	}
 
 	dbUser, err := cfg.db.GetUser(r.Context(), userRequest.Email)
@@ -301,18 +296,32 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	token, err := auth.MakeJWT(
-		dbUser.ID,
-		cfg.jwtSecret,
-		time.Duration(*userRequest.ExpireInSeconds)*time.Second,
-	)
+	token, err := auth.MakeJWT(dbUser.ID, cfg.jwtSecret, 1*time.Hour)
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	refreshToken := auth.MakeRefreshToken()
+
+	dbRefreshToken, err := cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    dbUser.ID,
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+		RevokedAt: sql.NullTime{},
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	userResponse := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
-		Token:     token,
+		ID:           dbUser.ID,
+		CreatedAt:    dbUser.CreatedAt,
+		UpdatedAt:    dbUser.UpdatedAt,
+		Email:        dbUser.Email,
+		Token:        token,
+		RefreshToken: dbRefreshToken.Token,
 	}
 	respondWithJSON(w, http.StatusOK, userResponse)
 }
