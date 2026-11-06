@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ import (
 
 func (cfg *apiConfig) chirpsListHandler(w http.ResponseWriter, r *http.Request) {
 	authorID := r.URL.Query().Get("author_id")
+	sortMethod := r.URL.Query().Get("sort")
 
 	var dbChirps []database.Chirp
 	var err error
@@ -46,6 +48,14 @@ func (cfg *apiConfig) chirpsListHandler(w http.ResponseWriter, r *http.Request) 
 		}
 		chirpList = append(chirpList, chirps)
 	}
+
+	switch sortMethod {
+	case "asc":
+		sort.Slice(chirpList, func(i, j int) bool { return chirpList[i].CreatedAt.Before(chirpList[j].CreatedAt) })
+	case "desc":
+		sort.Slice(chirpList, func(i, j int) bool { return chirpList[i].CreatedAt.After(chirpList[j].CreatedAt) })
+	}
+
 	respondWithJSON(w, http.StatusOK, chirpList)
 }
 
