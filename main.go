@@ -31,6 +31,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -93,6 +94,9 @@ func main() {
 	// Admin
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
+
+	// Webhook
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.polkaWebHookHandler)
 
 	err = server.ListenAndServe()
 	if err != nil {
@@ -161,10 +165,11 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	userResponse := User{
-		ID:        uuid.UUID(user.ID),
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          uuid.UUID(user.ID),
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	respondWithJSON(w, http.StatusCreated, userResponse)
@@ -334,6 +339,7 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		Email:        dbUser.Email,
 		Token:        token,
 		RefreshToken: dbRefreshToken.Token,
+		IsChirpyRed:  dbUser.IsChirpyRed,
 	}
 	respondWithJSON(w, http.StatusOK, userResponse)
 }
@@ -432,10 +438,11 @@ func (cfg *apiConfig) createUpdateUserHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	userResponse := User{
-		ID:        userDb.ID,
-		CreatedAt: userDb.CreatedAt,
-		UpdatedAt: userDb.UpdatedAt,
-		Email:     userDb.Email,
+		ID:          userDb.ID,
+		CreatedAt:   userDb.CreatedAt,
+		UpdatedAt:   userDb.UpdatedAt,
+		Email:       userDb.Email,
+		IsChirpyRed: userDb.IsChirpyRed,
 	}
 
 	respondWithJSON(w, http.StatusOK, userResponse)
@@ -478,6 +485,49 @@ func (cfg *apiConfig) deleteChirpsHandler(w http.ResponseWriter, r *http.Request
 	err = cfg.db.DeleteChirp(r.Context(), database.DeleteChirpParams{ID: chirp.ID, UserID: tokenUserID})
 	if err != nil {
 		respondWithError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) polkaWebHookHandler(w http.ResponseWriter, r *http.Request) {
+	type EventBody struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	var event EventBody
+	err := json.NewDecoder(r.Body).Decode(&event)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if event.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	fetchedUser, err := cfg.db.GetUserById(r.Context(), uuid.MustParse(event.Data.UserID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		return
+	}
+
+	args := database.UpdateUserIsChirpyRedParams{
+		IsChirpyRed: !fetchedUser.IsChirpyRed,
+		ID:          fetchedUser.ID,
+	}
+
+	err = cfg.db.UpdateUserIsChirpyRed(r.Context(), args)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
