@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -83,6 +84,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsRetrieve)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerChirpGet)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpsHandler)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpsHandler)
 
 	// Refresh tokens
 	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
@@ -437,4 +439,47 @@ func (cfg *apiConfig) createUpdateUserHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	respondWithJSON(w, http.StatusOK, userResponse)
+}
+
+func (cfg *apiConfig) deleteChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	tokenUserID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(id)
+	if err != nil {
+		log.Print(err)
+		respondWithError(w, http.StatusBadRequest, "Cannot parse the ID")
+		return
+	}
+
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithJSON(w, http.StatusNotFound, "No chirp found with that ID")
+			return
+		}
+	}
+
+	if tokenUserID != chirp.UserID {
+		respondWithError(w, http.StatusForbidden, "User does not own this chirp")
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), database.DeleteChirpParams{ID: chirp.ID, UserID: tokenUserID})
+	if err != nil {
+		respondWithError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
