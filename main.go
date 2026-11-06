@@ -64,22 +64,31 @@ func main() {
 		jwtSecret:      jwtSecret,
 	}
 
+	// File server
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 
+	// Health check
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	// Users
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.createLoginHandler)
 
+	// Chirps
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsRetrieve)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerChirpGet)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpsHandler)
 
-	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
+	// Refresh tokens
+	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
+	mux.HandleFunc("POST /api/revoke", apiCfg.handleRevokeToken)
 
+	// Admin
+	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetricsHandler)
 
 	err = server.ListenAndServe()
@@ -324,4 +333,49 @@ func (cfg *apiConfig) createLoginHandler(w http.ResponseWriter, r *http.Request)
 		RefreshToken: dbRefreshToken.Token,
 	}
 	respondWithJSON(w, http.StatusOK, userResponse)
+}
+
+func (cfg *apiConfig) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	dbRefreshToken, err := cfg.db.GetRefreshToken(r.Context(), token)
+	if err != nil || dbRefreshToken.ExpiresAt.Before(time.Now()) || dbRefreshToken.RevokedAt.Valid {
+		respondWithError(w, http.StatusUnauthorized, "Token is not found or expired")
+		return
+	}
+
+	newToken, err := auth.MakeJWT(dbRefreshToken.UserID, cfg.jwtSecret, 1*time.Hour)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondWithJSON(w, http.StatusOK, struct {
+		Token string `json:"token"`
+	}{Token: newToken})
+}
+
+func (cfg *apiConfig) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	arg := database.UpdateRevokeRefreshTokenParams{
+		RevokedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		UpdatedAt: time.Now(),
+		Token:     token,
+	}
+
+	err = cfg.db.UpdateRevokeRefreshToken(r.Context(), arg)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
