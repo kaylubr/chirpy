@@ -14,12 +14,27 @@ import (
 )
 
 func (cfg *apiConfig) chirpsListHandler(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.db.GetAllChirps(r.Context())
-	if err != nil {
-		log.Print(err)
-		respondWithError(w, http.StatusInternalServerError, "Cannot get chirps")
-		return
+	authorID := r.URL.Query().Get("author_id")
+
+	var dbChirps []database.Chirp
+	var err error
+
+	if authorID != "" {
+		dbChirps, err = cfg.db.GetAllUserChirps(r.Context(), uuid.MustParse(authorID))
+		if err != nil {
+			log.Print(err)
+			respondWithError(w, http.StatusInternalServerError, "Cannot get chirps for that user")
+			return
+		}
+	} else {
+		dbChirps, err = cfg.db.GetAllChirps(r.Context())
+		if err != nil {
+			log.Print(err)
+			respondWithError(w, http.StatusInternalServerError, "Cannot get chirps")
+			return
+		}
 	}
+
 	chirpList := make([]Chirp, 0, len(dbChirps))
 	for _, c := range dbChirps {
 		chirps := Chirp{
