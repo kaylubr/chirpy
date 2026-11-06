@@ -76,6 +76,7 @@ func main() {
 
 	// Users
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("PUT /api/users", apiCfg.createUpdateUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.createLoginHandler)
 
 	// Chirps
@@ -378,4 +379,62 @@ func (cfg *apiConfig) handleRevokeToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) createUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	tokenUserID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	type UserBody struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var decodedBody UserBody
+	err = json.NewDecoder(r.Body).Decode(&decodedBody)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	newPassword, err := auth.HashPassword(decodedBody.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updatedUser := database.UpdateUserParams{
+		Email:          decodedBody.Email,
+		HashedPassword: newPassword,
+		ID:             tokenUserID,
+	}
+	err = cfg.db.UpdateUser(r.Context(), updatedUser)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	userDb, err := cfg.db.GetUser(r.Context(), updatedUser.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	userResponse := User{
+		ID:        userDb.ID,
+		CreatedAt: userDb.CreatedAt,
+		UpdatedAt: userDb.UpdatedAt,
+		Email:     userDb.Email,
+	}
+
+	respondWithJSON(w, http.StatusOK, userResponse)
 }
