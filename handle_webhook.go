@@ -7,10 +7,17 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/kaylubr/chirpy/internal/auth"
 	"github.com/kaylubr/chirpy/internal/database"
 )
 
 func (cfg *apiConfig) polkaWebHookHandler(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil || apiKey != cfg.polkaKey {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
 	type EventBody struct {
 		Event string `json:"event"`
 		Data  struct {
@@ -19,7 +26,7 @@ func (cfg *apiConfig) polkaWebHookHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var event EventBody
-	err := json.NewDecoder(r.Body).Decode(&event)
+	err = json.NewDecoder(r.Body).Decode(&event)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
